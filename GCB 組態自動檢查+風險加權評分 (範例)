@@ -1,0 +1,83 @@
+@echo off
+:: GCB 組態自動檢查+風險加權評分 (範例)
+
+setlocal enabledelayedexpansion
+
+:: 組態項目權重清單（以 TWGCB-ID、權重、原則名、GCB值 舉例，請比照補齊所有細項）
+:: 注意：僅範例三項。實務請以完整清單依序展開，格式≡ "ID,原則,GCB值,權重"
+set ITEMS=TWGCB-01-001,DisableTaskMgr,1,3 TWGCB-02-007,LmCompatibilityLevel,5,5 TWGCB-03-012,GuestAccountStatus,關閉,2
+
+:: 初始化統計
+set FAILCOUNT=0
+set RISK=0
+
+:: 標題
+echo TWGCB-ID,原則設定名稱,GCB設定值,是否合規(Y/N),權重
+
+:: 依序逐項檢查
+for %%I in (%ITEMS%) do (
+    set ITEM=%%I
+    for /f "tokens=1-4 delims=," %%a in ("!ITEM!") do (
+        set ID=%%a
+        set POLICY=%%b
+        set VALUE=%%c
+        set WEIGHT=%%d
+        
+        :: 檢查項目(分項請依真實檢查語句設計，此為範例)
+        if "!ID!"=="TWGCB-01-001" (
+            reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableTaskMgr >nul 2>&1
+            if !errorlevel!==0 (
+                for /f "tokens=3" %%x in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableTaskMgr') do (
+                    if %%x==0x1 (
+                        set RESULT=Y
+                    ) else (
+                        set RESULT=N
+                    )
+                )
+            ) else (
+                set RESULT=N
+            )
+        )
+
+        if "!ID!"=="TWGCB-02-007" (
+            reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v LmCompatibilityLevel >nul 2>&1
+            if !errorlevel!==0 (
+                for /f "tokens=3" %%x in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v LmCompatibilityLevel') do (
+                    if %%x==0x5 (
+                        set RESULT=Y
+                    ) else (
+                        set RESULT=N
+                    )
+                )
+            ) else (
+                set RESULT=N
+            )
+        )
+
+        if "!ID!"=="TWGCB-03-012" (
+            net user guest | findstr /I "Account active" | findstr /I "No" >nul 2>&1
+            if !errorlevel!==0 (
+                set RESULT=Y
+            ) else (
+                set RESULT=N
+            )
+        )
+
+        :: 統計未通過
+        if "!RESULT!"=="N" (
+            set /a FAILCOUNT+=1
+            set /a RISK+=!WEIGHT!
+        )
+
+        :: 列印結果
+        echo !ID!,!POLICY!,!VALUE!,!RESULT!,!WEIGHT!
+    )
+)
+
+:: 彙總
+echo -------------------------
+echo 未通過項目數: !FAILCOUNT! 項
+echo 加權總風險值: !RISK!
+echo -------------------------
+
+pause
