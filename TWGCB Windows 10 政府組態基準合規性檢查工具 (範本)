@@ -1,0 +1,180 @@
+@echo off
+:: 設定 CHCP 為 65001 (UTF-8) 以支援中文顯示
+chcp 65001 > nul
+
+:: =================================================================
+:: TWGCB Windows 10 政府組態基準合規性檢查工具 (範本)
+:: 請以「管理員身份」執行此批次檔
+:: -----------------------------------------------------------------
+:: 注意: 此腳本僅包含幾個範例項目。您需要根據 TWGCB-01-005 文件
+::      的完整列表自行擴展這個腳本。
+:: =================================================================
+
+:: 定義輸出格式
+echo.
+echo ==================================================================================================================
+echo.
+echo  TWGCB 檢查報告 (部分項目範例) - 必須以管理員身份執行
+echo.
+echo ==================================================================================================================
+echo.
+echo TWGCB-ID      | 類別 / 原則設定名稱     | GCB設定值      | 目前系統值   | 是否合規
+echo ---------------|------------------------|-----------------|--------------|-------------
+echo.
+
+:: -----------------------------------------------------------------
+:: 輔助函數: 檢查 Registry 機碼
+:: Args: TWGCB_ID, POLICY_NAME, REG_PATH, REG_VALUE_NAME, EXPECTED_VALUE, OPERATOR
+:: -----------------------------------------------------------------
+:CheckRegistry
+    set "TWGCB_ID=%~1"
+    set "POLICY_NAME=%~2"
+    set "REG_PATH=%~3"
+    set "REG_VALUE_NAME=%~4"
+    set "EXPECTED_VALUE=%~5"
+    set "OPERATOR=%~6"
+    set "CURRENT_VALUE=未找到"
+    set "COMPLIANCE=N"
+
+    :: 嘗試查詢 Registry 機碼
+    for /f "tokens=3" %%a in ('reg query "%REG_PATH%" /v "%REG_VALUE_NAME%" 2^>nul ^| findstr /i "%REG_VALUE_NAME%"') do (
+        set "CURRENT_VALUE=%%a"
+        goto :CheckLogic
+    )
+
+    :: 如果未找到，則跳過檢查邏輯，直接輸出不合規
+    goto :OutputResult
+
+:CheckLogic
+    :: 將十六進制轉換為十進制 (僅對數值型設定)
+    if /i "%CURRENT_VALUE:~0,2%"=="0x" (
+        set /a CURRENT_DECIMAL_VALUE=CURRENT_VALUE
+    ) else (
+        set "CURRENT_DECIMAL_VALUE=%CURRENT_VALUE%"
+    )
+
+    :: 檢查邏輯
+    if /i "%OPERATOR%"=="EQ" (
+        if "%CURRENT_VALUE%"=="%EXPECTED_VALUE%" set "COMPLIANCE=Y"
+    ) else if /i "%OPERATOR%"=="NEQ" (
+        if not "%CURRENT_VALUE%"=="%EXPECTED_VALUE%" set "COMPLIANCE=Y"
+    ) else if /i "%OPERATOR%"=="GE" (
+        if %CURRENT_DECIMAL_VALUE% geq %EXPECTED_VALUE% set "COMPLIANCE=Y"
+    ) else if /i "%OPERATOR%"=="LE" (
+        if %CURRENT_DECIMAL_VALUE% leq %EXPECTED_VALUE% set "COMPLIANCE=Y"
+    )
+
+    goto :OutputResult
+
+:OutputResult
+    :: 格式化輸出
+    echo %TWGCB_ID% | %POLICY_NAME% | %EXPECTED_VALUE% | %CURRENT_VALUE% | %COMPLIANCE%
+    set "TWGCB_ID="
+    set "POLICY_NAME="
+    set "REG_PATH="
+    set "REG_VALUE_NAME="
+    set "EXPECTED_VALUE="
+    set "OPERATOR="
+    set "CURRENT_VALUE="
+    set "COMPLIANCE="
+    goto :eof
+
+:: -----------------------------------------------------------------
+:: 輔助函數: 檢查 NET ACCOUNTS 密碼原則 (最小密碼長度)
+:: -----------------------------------------------------------------
+:CheckNetAccounts
+    set "TWGCB_ID=TWGCB-01-005-002"
+    set "POLICY_NAME=最小密碼長度"
+    set "GCB_VALUE=8"
+    set "CURRENT_VALUE=未讀取"
+    set "COMPLIANCE=N"
+
+    :: 執行 net accounts 並解析結果
+    for /f "tokens=*" %%a in ('net accounts 2^>nul ^| findstr /i "最小密碼長度"') do (
+        :: 範例行: 最小密碼長度:               8
+        for /f "tokens=3" %%b in ("%%a") do (
+            set "CURRENT_VALUE=%%b"
+        )
+    )
+
+    :: 檢查邏輯: 最小密碼長度 >= GCB設定值 (8)
+    if "%CURRENT_VALUE%" neq "未讀取" (
+        if %CURRENT_VALUE% geq %GCB_VALUE% set "COMPLIANCE=Y"
+    )
+
+    echo %TWGCB_ID% | %POLICY_NAME% | >= %GCB_VALUE% | %CURRENT_VALUE% | %COMPLIANCE%
+    goto :eof
+
+:: -----------------------------------------------------------------
+:: 開始執行檢查項目
+:: -----------------------------------------------------------------
+
+:: -----------------------------------------------------------------
+:: 項目 1: UAC: 啟用使用者帳戶控制 (Registry Check)
+:: GCB ID: TWGCB-01-005-010 (假設)
+:: GCB 設定值: 1 (啟用)
+:: -----------------------------------------------------------------
+call :CheckRegistry "TWGCB-01-005-010" "UAC: 啟用使用者帳戶控制" "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" "EnableLUA" "0x1" "EQ"
+
+
+:: -----------------------------------------------------------------
+:: 項目 2: 最小密碼長度 (Command Check)
+:: GCB ID: TWGCB-01-005-002 (假設)
+:: GCB 設定值: >= 8 個字元
+:: -----------------------------------------------------------------
+call :CheckNetAccounts
+
+
+:: -----------------------------------------------------------------
+:: 項目 3: 關閉自動播放功能 (AutoRun) (Registry Check)
+:: GCB ID: TWGCB-01-005-050 (假設)
+:: GCB 設定值: 0xFF (針對所有裝置停用)
+:: -----------------------------------------------------------------
+call :CheckRegistry "TWGCB-01-005-050" "關閉自動播放功能" "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" "NoDriveTypeAutoRun" "0xff" "EQ"
+
+
+:: -----------------------------------------------------------------
+:: 項目 4: 密碼最長存留期間 (Registry Check - 60天)
+:: GCB ID: TWGCB-01-005-003 (假設)
+:: GCB 設定值: <= 60 天 (0x3c)
+:: Path: HKLM\System\CurrentControlSet\Services\NTDS\Parameters (For Domain)
+:: The actual GCB check often points to the setting applied via LSA/Security Database.
+:: We will check the local policy setting reflected in the registry.
+:: The actual setting is in an inaccessible binary field. This example is for demonstration.
+:: NOTE: Checking LsaPolicy/Registry directly is complex. We'll use a commonly accessible path that might reflect the policy.
+:: For simplicity and demonstration, we will check a placeholder in the System Hive.
+:: For a true GCB check, use 'net accounts' which is reliable for this policy.
+:: Re-using net accounts for another check type: Max Password Age.
+:: -----------------------------------------------------------------
+set "TWGCB_ID=TWGCB-01-005-003"
+set "POLICY_NAME=密碼最長存留期間"
+set "GCB_VALUE=60"
+set "CURRENT_VALUE=未讀取"
+set "COMPLIANCE=N"
+
+:: 執行 net accounts 並解析結果
+for /f "tokens=*" %%a in ('net accounts 2^>nul ^| findstr /i "密碼最長存留期間"') do (
+    :: 範例行: 密碼最長存留期間 (天):     90
+    for /f "tokens=4" %%b in ("%%a") do (
+        set "CURRENT_VALUE=%%b"
+    )
+)
+
+:: 檢查邏輯: 最長存留期間 <= GCB設定值 (60)
+if "%CURRENT_VALUE%" neq "未讀取" (
+    :: 移除 "天" (if present)
+    set "CURRENT_VALUE=%CURRENT_VALUE:天=%"
+    if %CURRENT_VALUE% leq %GCB_VALUE% set "COMPLIANCE=Y"
+)
+
+echo %TWGCB_ID% | %POLICY_NAME% | <= %GCB_VALUE% 天 | %CURRENT_VALUE% 天 | %COMPLIANCE%
+goto :eof
+
+:: -----------------------------------------------------------------
+:: 結束
+:: -----------------------------------------------------------------
+
+echo.
+echo ==================================================================================================================
+echo.
+pause
